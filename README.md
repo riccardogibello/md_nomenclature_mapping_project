@@ -31,7 +31,7 @@ If you want to use this work in your research, please cite the following paper:
 Moreover, it is possible to access all the input, output, and model files used in the paper through the following
 Zenodo repository:
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.0000000.svg)](https://doi.org/10.5281/zenodo.0000000)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.13890612.svg)](https://doi.org/10.5281/zenodo.13890612)
 
 Access to the data contained in this Zenodo repository can be requested by following the instructions in the
 landing page of the repository.
