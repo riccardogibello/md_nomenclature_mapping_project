@@ -194,10 +194,41 @@ def get_best_emdn_categories(
     sorted_emdn_categories = _probability_df.loc[
         _fda_specialty
     ]
-
-    # Reorder the EMDN categories based on the new probabilities, starting from the most probable
-    sorted_emdn_categories = sorted_emdn_categories.sort_values(ascending=False).index.tolist()
-
+    # Build a dataframe in which the index is the EMDN category and the column is the probability
+    sorted_emdn_categories = pd.DataFrame(sorted_emdn_categories)
+    # Reset the index
+    sorted_emdn_categories.reset_index(
+        inplace=True
+    )
+    # _emdn_weight_df['count'] = 1
+    sorted_emdn_categories.columns = ['emdn_category', 'count']
+    # Join the dataframes over the index
+    sorted_emdn_categories = sorted_emdn_categories.join(
+        _emdn_weight_df,
+        how='left',
+        on='emdn_category',
+        lsuffix='_x',
+        rsuffix='_y'
+    )
+    # Replace any NaN value with 0
+    sorted_emdn_categories.fillna(
+        0,
+        inplace=True
+    )
+    # Multiply the columns containing 'count_x' and 'count_y' values
+    sorted_emdn_categories['count'] = sorted_emdn_categories['count_x'] * sorted_emdn_categories['count_y']
+    # Drop the columns containing 'count_x' and 'count_y' values
+    sorted_emdn_categories.drop(
+        columns=['count_x', 'count_y'],
+        inplace=True
+    )
+    # Sort the EMDN categories by the probability in descending order
+    sorted_emdn_categories = sorted_emdn_categories.sort_values(
+        by='count',
+        ascending=False
+    )
+    # Get the EMDN categories
+    sorted_emdn_categories = sorted_emdn_categories['emdn_category'].tolist()
     return sorted_emdn_categories
 
 
@@ -216,6 +247,14 @@ def aggregate_by_emdn_category(
     _emdn_category_count_df = _selected_df[['emdn_category', 'count']].groupby(
         by=['emdn_category']
     ).sum()
+    """# Add all the EMDN categories which are not present in the dataset
+    # with a count of 0
+    emdn_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    for letter in emdn_letters:
+        if letter not in _emdn_category_count_df.index:
+            _emdn_category_count_df.loc[letter] = 0
+    # Add to all the counts a small value to avoid vanishing probabilities
+    _emdn_category_count_df += 10"""
     # Compute the percentage of each EMDN category
     _emdn_category_count_df = _emdn_category_count_df / _emdn_category_count_df.sum()
 
@@ -230,6 +269,11 @@ def add_selected_rows(
         _get_best_emdn_categories: Callable[[str, pd.DataFrame], list[str]]
 ):
     for gmdn_term, row_indexes in _key_indexes_map.items():
+        """tmp_gmdn_term = gmdn_term
+        tmp_gmdn_term = re.sub(r'[^a-zA-Z0-9\- ]', '', tmp_gmdn_term)
+        tmp_gmdn_term = tmp_gmdn_term.lower()
+        if tmp_gmdn_term.__contains__('epidural anaesthesia set n'):
+            print('here')"""
         # Get all the rows of the initial dataset associated to the current key
         _rows = _df.loc[row_indexes].reset_index(drop=True)
         # Get the dataframe containing the probabilities of the EMDN categories

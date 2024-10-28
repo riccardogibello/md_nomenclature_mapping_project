@@ -2,7 +2,9 @@ import time
 
 import pandas as pd
 from sentence_transformers import SentenceTransformer
-from src.__file_paths import TEST_FILE_PATH, TRAIN_FILE_PATH
+
+from src.__constants import FIRST_TEST_EMDN_DF_INDEX, LAST_TEST_EMDN_DF_INDEX
+from src.__file_paths import TEST_FILE_PATH, TRAIN_FILE_PATH, EMDN_FILE_PATH
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from src.business_logic.code_mappers.model_mappers.data_driven_emdn_code_predictor import DataDrivenEmdnCodePredictor
@@ -15,8 +17,7 @@ from src.business_logic.pipeline.model_training.output_utilities import compute_
     compute_index_level_heatmap, compute_models_comparison, output_test_distribution
 from src.business_logic.utilities.os_utilities import create_directory
 from src.data_model.nomenclature_codes.emdn_code import find_common_emdn_code
-from src.__directory_paths import MODELS_DIRECTORY_PATH, \
-    GMDN_EMDN_VALIDATION_DIRECTORY_PATH
+from src.__directory_paths import MODELS_DIRECTORY_PATH, GMDN_EMDN_VALIDATION_DIRECTORY_PATH
 
 
 def build_emdn_category_predictor(
@@ -36,7 +37,6 @@ def build_emdn_category_predictor(
     :return: The instance of the EMDN category predictor.
     """
     return EmdnCategoryPredictor(
-        lstm_layers=0,
         embedding_model=SentenceTransformer(model_name),
         dropout=0.1,
         epochs=50,
@@ -47,6 +47,7 @@ def build_emdn_category_predictor(
         train_file_path=train_file_path,
         test_file_path=test_file_path,
         ff_layer_sizes=[96],
+        label_encoder_path=model_validation_folder_path + 'label_encoder.pkl',
     )
 
 
@@ -76,7 +77,10 @@ def validate_model(
         _test_dataset: pd.DataFrame,
 ) -> str:
     """
-    This method validates the EMDN code predictor on the test dataset.
+    This method validates the EMDN code predictor on the test dataset. It compiles all the mapping candidates, up to
+    the maximum number of accepted EMDN mapping candidates, and saves the results to a file. It also computes the
+    position of the right option and the level of concordance between the predicted and the gold standard EMDN codes
+    (if a right mapping is found).
 
     :param base_folder_path: The path to the folder where the results will be saved.
     :param _model: The EMDN code predictor to be validated.
@@ -123,7 +127,16 @@ def validate_model(
             # Get the ordered list of the most probable EMDN codes
             _predicted_emdn = _predicted_emdn_probability[_gmdn_term_name]
             tuple_index = 0
+            # Compute the last column index that can be accessed in the test dataframe (i.e., the maximum
+            # number of accepted EMDN mapping candidates)
+            last_accessible_index_col = 2 + (LAST_TEST_EMDN_DF_INDEX - FIRST_TEST_EMDN_DF_INDEX) * 2 - 1
+            # Keep an indicator to check if the EMDN category of the gold standard has been found (given that
+            # multiple EMDN codes of the same category can be provided for the same GMDN term name)
+            is_emdn_category_found = False
             for option_index, emdn_code_score_tuple in enumerate(_predicted_emdn):
+                # If the maximum column index that should be accessed is reached, break the loop
+                if tuple_index + 3 > last_accessible_index_col:
+                    break
                 # Get the EMDN code
                 _emdn_code = emdn_code_score_tuple[0]
                 # Get its EMDN category
@@ -132,7 +145,9 @@ def validate_model(
                 # associated to the given EMDN category
                 _score = emdn_code_score_tuple[1]
                 # If the EMDN gold standard has the same category as the predicted one
-                if _emdn_category == gold_standard_category:
+                if _emdn_category == gold_standard_category and not is_emdn_category_found:
+                    # Set the boolean value indicating that the EMDN category has been found
+                    is_emdn_category_found = True
                     # Compute the max level of concordance between the two codes
                     _, match_level = find_common_emdn_code(
                         str(gold_standard_emdn_code),
@@ -142,26 +157,23 @@ def validate_model(
                     dataset_rows[current_dataset_index, -1] = option_index
                     # Set the level of concordance in the dataset
                     dataset_rows[current_dataset_index, -2] = match_level
-
                 # Set the EMDN code and the probability in the dataset
                 dataset_rows[current_dataset_index, tuple_index + 2] = _emdn_code
                 dataset_rows[current_dataset_index, tuple_index + 3] = _score
                 # Update the next index of the dataset to two positions ahead
                 tuple_index += 2
+            # Update the index of the dataset to point to the next row
             dataset_index += 1
-
     # Replace the dataset rows with the new ones
     _test_dataset = pd.DataFrame(
         dataset_rows,
         columns=_test_dataset.columns
     )
-
-    # Save the results to a file
+    # Save the results to a file and return the path
     file_path = base_folder_path + results_file_name + '.csv'
     _test_dataset.to_csv(
         file_path
     )
-
     return file_path
 
 
@@ -210,7 +222,7 @@ def train_emdn_category_predictor(
         print(f"The model has {_get_model_parameters(_emdn_category_predictor.model):,} trainable parameters.")
         print(divider)
         start_time = time.time()
-        # Train the regressor
+        # Train the EMDN category predictor
         _emdn_category_predictor.fit(
             scheduler_builder=lambda optimizer: ReduceLROnPlateau(
                 optimizer,
@@ -225,32 +237,38 @@ def train_emdn_category_predictor(
 
         # Instantiate the EMDN code predictors (baseline and data-driven)
         _data_driven_emdn_code_predictor = DataDrivenEmdnCodePredictor(
-            _emdn_category_predictor=_emdn_category_predictor
+            _emdn_category_predictor=_emdn_category_predictor,
+            emdn_nomenclature_path=EMDN_FILE_PATH,
         )
+        # Get a list of the EMDN categories that can be predicted by the model
+        train_categories = list(_data_driven_emdn_code_predictor.emdn_category_predictor.labels_dictionary.values())
+        # Instantiate the model predicting the EMDN code based only on the cosine similarity between the GMDN term name
+        # and the EMDN codes
         _base_emdn_code_predictor = EmdnCodePredictor(
             pretrained_model=_data_driven_emdn_code_predictor.pretrained_model,
-            emdn_nomenclature=_data_driven_emdn_code_predictor.emdn_nomenclature,
-            emdn_code_to_embedding=_data_driven_emdn_code_predictor.emdn_code_to_embedding
+            emdn_nomenclature_path=EMDN_FILE_PATH,
+            emdn_code_to_embedding=_data_driven_emdn_code_predictor.emdn_code_to_embedding,
+            train_emdn_categories=train_categories
         )
 
         model_validation_folder_path = GMDN_EMDN_VALIDATION_DIRECTORY_PATH + model_subfolder
         aggregated_statistics_dfs = []
         for _model, _model_name, _model_validation_folder_path, output_file_name in zip(
                 [
-                    _base_emdn_code_predictor,
-                    _data_driven_emdn_code_predictor
+                    _data_driven_emdn_code_predictor,
+                    _base_emdn_code_predictor
                 ],
                 [
-                    'baseline',
-                    'data_driven'
+                    'data_driven',
+                    'baseline'
                 ],
                 [
-                    model_validation_folder_path + 'base_emdn_code_predictor/',
-                    model_validation_folder_path + 'data_driven_emdn_code_predictor/'
+                    model_validation_folder_path + 'data_driven_emdn_code_predictor/',
+                    model_validation_folder_path + 'base_emdn_code_predictor/'
                 ],
                 [
-                    'base_emdn_code_predictor_results',
-                    'data_driven_emdn_code_predictor_results'
+                    'data_driven_emdn_code_predictor_results',
+                    'base_emdn_code_predictor_results'
                 ]
         ):
             # Validate the current model and get the path to the validation file

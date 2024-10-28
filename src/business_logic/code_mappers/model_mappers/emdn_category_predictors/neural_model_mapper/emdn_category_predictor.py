@@ -1,10 +1,8 @@
 import os
-from pickle import UnpicklingError
 
 import numpy as np
 
 from nltk import word_tokenize, download, FreqDist
-from src.__file_paths import TEST_FILE_PATH, TRAIN_FILE_PATH
 from transformers import TextDataset
 from sentence_transformers import SentenceTransformer
 
@@ -29,7 +27,6 @@ from src.business_logic.code_mappers.model_mappers.emdn_category_predictors.neur
     SentenceTransformerDataset
 from src.business_logic.utilities.os_utilities import convert_to_device
 from src.business_logic.code_mappers.model_mappers.clean_code_text import clean_text
-from src.__directory_paths import MODELS_DIRECTORY_PATH
 
 
 def build_weighted_sampler(
@@ -90,32 +87,29 @@ class EmdnCategoryPredictor(
 
     def __init__(
             self,
+            label_encoder_path: str,
             max_words: Optional[int] = 30000,
             max_input_length: Optional[int] = 2000,
-            lstm_is_bidirectional: Optional[bool] = True,
-            lstm_layers: Optional[int] = 2,
-            lstm_layer_dropout: Optional[float] = 0.1,
-            lstm_hidden_dimension: Optional[int] = 32,
-            lstm_embedding_dim: Optional[int] = None,
             embedding_model: Optional[SentenceTransformer] = None,
             dropout: Optional[float] = 0.1,
             epochs: Optional[int] = 5,
             batch_size: Optional[int] = 32,
             validation_proportion: Optional[float] = None,
             model_path: str = None,
-            output_directory_path: str = MODELS_DIRECTORY_PATH,
-            train_file_path: str = TRAIN_FILE_PATH,
-            test_file_path: str = TEST_FILE_PATH,
+            output_directory_path: Optional[str] = None,
+            train_file_path: Optional[str] = None,
+            test_file_path: Optional[str] = None,
             ff_layer_sizes: Optional[list[int]] = None,
     ):
-        if lstm_embedding_dim is None and embedding_model is None:
-            raise ValueError("Either an embedding dimension or a SentenceTransformer model must be provided.")
-        elif lstm_embedding_dim is not None and embedding_model is not None:
-            raise ValueError("Only one of the embedding dimension or the SentenceTransformer model must be provided.")
+        if output_directory_path is None:
+            raise ValueError("The output directory path of the model must be specified.")
+        if embedding_model is None:
+            raise ValueError("A SentenceTransformer model must be provided.")
 
         super().__init__(
             output_directory_path=output_directory_path,
             validation_proportion=validation_proportion,
+            label_encoder_path=label_encoder_path,
             train_file_path=train_file_path,
             test_file_path=test_file_path,
         )
@@ -128,69 +122,51 @@ class EmdnCategoryPredictor(
         self.n_classes = len(self.labels_dictionary)
         self.epochs = epochs
         self.batch_size = batch_size
-
-        self.model = convert_to_device(
-            CustomModel(
-                vocab_size=max_words + 2,
-                lstm_is_bidirectional=lstm_is_bidirectional,
-                lstm_layers=lstm_layers,
-                lstm_layer_dropout=lstm_layer_dropout,
-                lstm_hidden_dim=lstm_hidden_dimension,
-                lstm_embed_dim=lstm_embedding_dim,
-                output_dim=self.n_classes,
-                dropout=dropout,
-                embedding_model=embedding_model,
-                ff_layer_sizes=ff_layer_sizes
-            ),
-            device_name='cuda'
-        )
-
         self.model_path = model_path
-        # Load the last best model state
-        if self.model_path is not None and os.path.exists(self.model_path):
-            self.load_pretrained()
-
-        self._encode_data(
-            use_dimensionality_reduction=False
-        )
+        self.dropout = dropout
+        self.ff_layer_sizes = ff_layer_sizes
+        self.embedding_model = embedding_model
+        self.model: CustomModel | None = None
+        self.load_model()
 
     def _encode_data(
             self,
             use_dimensionality_reduction: bool = False
     ) -> None:
-        # Clean all the strings in the train and test data
-        self.train_data = [
-            [clean_text(_string, perform_classical_cleaning=False)]
-            for _string in self.train_data
-        ]
-        self.test_data = [
-            [clean_text(_string, perform_classical_cleaning=False)]
-            for _string in self.test_data
-        ]
-        # If validation must be performed
-        if self.validation_proportion is not None:
-            # Clean all the strings in the validation data
-            self.validation_data = [
+        if self.train_data is not None and self.test_data is not None:
+            # Clean all the strings in the train and test data
+            self.train_data = [
                 [clean_text(_string, perform_classical_cleaning=False)]
-                for _string in self.validation_data
+                for _string in self.train_data
             ]
+            self.test_data = [
+                [clean_text(_string, perform_classical_cleaning=False)]
+                for _string in self.test_data
+            ]
+            # If validation must be performed
+            if self.validation_proportion is not None:
+                # Clean all the strings in the validation data
+                self.validation_data = [
+                    [clean_text(_string, perform_classical_cleaning=False)]
+                    for _string in self.validation_data
+                ]
 
-        # Build the vocabulary from the training data,
-        # if the embedding model is not a SentenceTransformer model
-        if type(self.model.embedding_layer) is not SentenceTransformer:
-            def yield_tokens(
-                    data_iter: list[str]
-            ):
-                # Iterate over all the text strings of the iterator
-                for text in data_iter:
-                    # And singularly yield the tokens of the text
-                    yield self.tokenizer(text)
+            # Build the vocabulary from the training data,
+            # if the embedding model is not a SentenceTransformer model
+            if type(self.model.embedding_layer) is not SentenceTransformer:
+                def yield_tokens(
+                        data_iter: list[str]
+                ):
+                    # Iterate over all the text strings of the iterator
+                    for text in data_iter:
+                        # And singularly yield the tokens of the text
+                        yield self.tokenizer(text)
 
-            # Call the method to build the vocabulary from the iterator
-            self.vocab = build_vocab_from_iterator(
-                yield_tokens([_list[0] for _list in self.train_data]),
-                specials=["<unk>"]
-            )
+                # Call the method to build the vocabulary from the iterator
+                self.vocab = build_vocab_from_iterator(
+                    yield_tokens([_list[0] for _list in self.train_data]),
+                    specials=["<unk>"]
+                )
 
     def get_text_dataset(
             self,
@@ -332,7 +308,7 @@ class EmdnCategoryPredictor(
 
         # Load the last best model state and test the model
         if self.model_path is not None:
-            self.load_pretrained()
+            self.load_model()
         self.perform_test()
 
     def _perform_validation(
@@ -466,32 +442,35 @@ class EmdnCategoryPredictor(
 
         print(f'Test Loss: {avg_test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}')
 
-    def load_pretrained(
+    def load_model(
             self
     ):
-        if self.model_path is None:
-            raise ValueError("The model path must be specified to load a pre-trained model.")
+        # If the number of output classes is unknown and the model path is not provided
+        if self.n_classes is None:
+            raise ValueError("You must specify the number of classes.")
         else:
-            try:
-                # Load the state dictionary
-                state_dict = load(self.model_path)
-
+            # Build the model with the given number of classes
+            self.model = CustomModel(
+                output_dim=self.n_classes,
+                dropout=self.dropout,
+                embedding_model=self.embedding_model,
+                ff_layer_sizes=self.ff_layer_sizes
+            )
+            # If a pretrained model has been given
+            if self.model_path is not None and os.path.exists(self.model_path):
+                # Load the state dictionary of the model
+                state_dict = load(
+                    self.model_path,
+                    weights_only=True
+                )
                 # Load the state dictionary into the model
                 self.model.load_state_dict(state_dict)
-
-                self.model = convert_to_device(
-                    self.model,
-                    'cuda'
-                )
-
-                # Set the model to evaluation mode
-                self.model.eval()
-            except (
-                    FileNotFoundError,
-                    RuntimeError,
-                    UnpicklingError
-            ):
-                raise Exception(f"Failed to load the model.")
+            self.model = convert_to_device(
+                self.model,
+                'cuda'
+            )
+            # Set the model to evaluation mode
+            self.model.eval()
 
     def predict(
             self,

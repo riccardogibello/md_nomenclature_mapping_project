@@ -1,3 +1,5 @@
+import os
+import pickle
 from typing import Optional, Any
 
 import numpy as np
@@ -156,123 +158,139 @@ def output_dataset_distribution(
 class AbstractEmdnCategoryPredictor:
     def __init__(
             self,
-            train_file_path: str,
-            test_file_path: str,
+            output_directory_path: str,
+            label_encoder_path: str,
+            train_file_path: Optional[str] = None,
+            test_file_path: Optional[str] = None,
             validation_proportion: Optional[float] = None,
-            output_directory_path: str = MODELS_DIRECTORY_PATH,
     ):
-        self.output_folder = output_directory_path
-        create_directory(self.output_folder)
+        are_data_provided = train_file_path is not None and test_file_path is not None
+        is_label_enc_existing = label_encoder_path is not None and os.path.exists(label_encoder_path)
+        # Raise an error if both the label encoder path and the train file path are not provided
+        if not (is_label_enc_existing or are_data_provided):
+            raise ValueError("A label encoder path or a train file path must be provided.")
+        else:
+            self.output_folder = output_directory_path
+            create_directory(self.output_folder)
 
-        # Set the random seed
-        self.random_seed = RANDOM_SEED_INT
-        np.random.seed(self.random_seed)
+            # Set the random seed
+            self.random_seed = RANDOM_SEED_INT
+            np.random.seed(self.random_seed)
 
-        # Store the proportion of the training set that
-        # must be used for validation
-        self.validation_proportion = validation_proportion
+            # Store the proportion of the training set that
+            # must be used for validation
+            self.validation_proportion = validation_proportion
 
-        # Set all the numpy arrays for containing the datasets
-        # and the labels
-        self.train_data: np.ndarray[str] | None = None
-        self.validation_data: np.ndarray[str] | None = None
-        self.test_data: np.ndarray[str] | None = None
-        self.train_labels: np.ndarray[str] | None = None
-        self.validation_labels: np.ndarray[str] | None = None
-        self.test_labels: np.ndarray[str] | None = None
+            # Set all the numpy arrays for containing the datasets
+            # and the labels
+            self.train_data: np.ndarray[str] | None = None
+            self.validation_data: np.ndarray[str] | None = None
+            self.test_data: np.ndarray[str] | None = None
+            self.train_labels: np.ndarray[str] | None = None
+            self.validation_labels: np.ndarray[str] | None = None
+            self.test_labels: np.ndarray[str] | None = None
 
-        # This is a dictionary that contains the relationship
-        # between the integer labels and the original ones
-        self.labels_dictionary: dict[int, str] | None = None
+            # This is a dictionary that contains the relationship
+            # between the integer labels and the original ones
+            self.labels_dictionary: dict[int, str] | None = None
 
-        # Load the needed data to train the predictor
-        self._load_corpus(
-            train_file_path=train_file_path,
-            test_file_path=test_file_path
-        )
+            if are_data_provided:
+                # Load the needed data to train the predictor
+                self._load_corpus(
+                    train_file_path=train_file_path,
+                    test_file_path=test_file_path,
+                    label_encoder_path=label_encoder_path
+                )
+            else:
+                self._encode_labels(
+                    label_encoder_path=label_encoder_path,
+                )
 
     def _load_corpus(
             self,
             train_file_path: str,
-            test_file_path: str
+            test_file_path: str,
+            label_encoder_path: str
     ) -> None:
-        # Load the train and test datasets
-        _train_dataset, _test_dataset = load_training_data_file(
-            train_file_path,
-            test_file_path
-        )
-
-        # Get all the train and test labels
-        _train_labels = _train_dataset[:, -1]
-        _test_labels = _test_dataset[:, -1]
-        # Concatenate the train and test labels to get all the possible labels
-        all_labels: list[str] = list(
-            np.concatenate((_train_labels, _test_labels))
-        )
-        # Encode the labels
-        all_labels_encoded = self._encode_labels(
-            all_labels,
-        )
-        # Split the encoded labels back into train and test labels
-        _train_dataset[:, -1] = all_labels_encoded[:len(_train_labels)]
-        _test_dataset[:, -1] = all_labels_encoded[len(_train_labels):]
-
-        # If validation must be performed
-        if self.validation_proportion is not None:
-            # Split the train set into train and validation sets, keeping the same
-            # proportion of the labels
-            total_train_data, total_validation_data = sklearn.model_selection.train_test_split(
-                _train_dataset,
-                test_size=self.validation_proportion,
-                shuffle=True,
-                random_state=self.random_seed,
-                stratify=_train_dataset[:, -1]
+        if train_file_path is not None and test_file_path is not None:
+            # Load the train and test datasets
+            _train_dataset, _test_dataset = load_training_data_file(
+                train_file_path,
+                test_file_path
             )
-            self.validation_data = total_validation_data[:, :-1]
-            self.validation_labels = total_validation_data[:, -1]
-        else:
-            total_train_data = _train_dataset
 
-        # Set the train data and labels
-        self.train_data = total_train_data[:, :-1]
-        self.train_labels = total_train_data[:, -1]
-        self.test_data = _test_dataset[:, :-1]
-        self.test_labels = _test_dataset[:, -1]
-        # Convert all the labels to int values
-        self.train_labels = self.train_labels.astype(int)
-        self.test_labels = self.test_labels.astype(int)
+            # Get all the train and test labels
+            _train_labels = _train_dataset[:, -1]
+            _test_labels = _test_dataset[:, -1]
+            # Concatenate the train and test labels to get all the possible labels
+            all_labels: list[str] = list(
+                np.concatenate((_train_labels, _test_labels))
+            )
+            # Encode the labels
+            all_labels_encoded = self._encode_labels(
+                _labels=all_labels,
+                label_encoder_path=label_encoder_path
+            )
+            # Split the encoded labels back into train and test labels
+            _train_dataset[:, -1] = all_labels_encoded[:len(_train_labels)]
+            _test_dataset[:, -1] = all_labels_encoded[len(_train_labels):]
 
-        # Store the image containing the distribution of the test dataset
-        # across the different labels
-        output_dataset_distribution(
-            pd.DataFrame(
-                self.test_labels,
-                columns=['label'],
-            ),
-            int_to_medical_specialty=self.labels_dictionary,
-            output_folder=self.output_folder,
-            file_name='test_dataset_distribution.png'
-        )
-        # Store the image containing the distribution of the train dataset
-        # across the different labels
-        output_dataset_distribution(
-            pd.DataFrame(
-                _train_dataset[:, -1],
-                columns=['label'],
-            ),
-            int_to_medical_specialty=self.labels_dictionary,
-            output_folder=self.output_folder,
-            file_name='train_dataset_distribution.png'
-        )
+            # If validation must be performed
+            if self.validation_proportion is not None:
+                # Split the train set into train and validation sets, keeping the same
+                # proportion of the labels
+                total_train_data, total_validation_data = sklearn.model_selection.train_test_split(
+                    _train_dataset,
+                    test_size=self.validation_proportion,
+                    shuffle=True,
+                    random_state=self.random_seed,
+                    stratify=_train_dataset[:, -1]
+                )
+                self.validation_data = total_validation_data[:, :-1]
+                self.validation_labels = total_validation_data[:, -1]
+            else:
+                total_train_data = _train_dataset
 
-        del _train_dataset
-        del total_train_data
-        del total_validation_data
-        del _test_dataset
-        del _train_labels
-        del _test_labels
-        del all_labels
-        del all_labels_encoded
+            # Set the train data and labels
+            self.train_data = total_train_data[:, :-1]
+            self.train_labels = total_train_data[:, -1]
+            self.test_data = _test_dataset[:, :-1]
+            self.test_labels = _test_dataset[:, -1]
+            # Convert all the labels to int values
+            self.train_labels = self.train_labels.astype(int)
+            self.test_labels = self.test_labels.astype(int)
+
+            # Store the image containing the distribution of the test dataset
+            # across the different labels
+            output_dataset_distribution(
+                pd.DataFrame(
+                    self.test_labels,
+                    columns=['label'],
+                ),
+                int_to_medical_specialty=self.labels_dictionary,
+                output_folder=self.output_folder,
+                file_name='test_dataset_distribution.png'
+            )
+            # Store the image containing the distribution of the train dataset
+            # across the different labels
+            output_dataset_distribution(
+                pd.DataFrame(
+                    _train_dataset[:, -1],
+                    columns=['label'],
+                ),
+                int_to_medical_specialty=self.labels_dictionary,
+                output_folder=self.output_folder,
+                file_name='train_dataset_distribution.png'
+            )
+
+            del _train_dataset
+            del total_train_data
+            del total_validation_data
+            del _test_dataset
+            del _train_labels
+            del _test_labels
+            del all_labels
+            del all_labels_encoded
 
     def _encode_data(
             self,
@@ -288,18 +306,39 @@ class AbstractEmdnCategoryPredictor:
 
     def _encode_labels(
             self,
-            _labels: list[str]
-    ):
-        # Existing initialization code
-        self.label_encoder = LabelEncoder()
-        # Fit and transform the labels to integers
-        returned_labels = self.label_encoder.fit_transform(_labels)
+            label_encoder_path: str,
+            _labels: Optional[list[str]] = None,
+    ) -> np.ndarray[int] | None:
+        returned_labels = None
+        # If the label encoder already exists, load it
+        if os.path.exists(label_encoder_path):
+            # Load the LabelEncoder from the given file
+            with open(label_encoder_path, 'rb') as file:
+                self.label_encoder = pickle.load(file)
 
-        # Store the relationship between each integer label and the original one
-        for original_label, returned_label in zip(_labels, returned_labels):
-            if self.labels_dictionary is None:
-                self.labels_dictionary = {}
-            self.labels_dictionary[returned_label] = original_label
+            # Initialize the dictionary of labels
+            self.labels_dictionary = {
+                index: label
+                for index, label in enumerate(self.label_encoder.classes_)
+            }
+            if _labels is not None:
+                # Transform the labels to integers
+                returned_labels = self.label_encoder.transform(_labels)
+        else:
+            # Initialize a new label encoder
+            self.label_encoder = LabelEncoder()
+            if _labels is not None:
+                # Fit and transform the labels to integers
+                returned_labels = self.label_encoder.fit_transform(_labels)
+                # Store the relationship between each integer label and the original one
+                for original_label, returned_label in zip(_labels, returned_labels):
+                    if self.labels_dictionary is None:
+                        self.labels_dictionary = {}
+                    self.labels_dictionary[returned_label] = original_label
+            # Store the label encoder in a file
+            with open(label_encoder_path, 'wb') as file:
+                file: Any
+                pickle.dump(self.label_encoder, file)
 
         return returned_labels
 

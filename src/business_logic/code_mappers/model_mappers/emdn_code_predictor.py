@@ -2,7 +2,6 @@ from typing import Optional
 
 import pandas as pd
 from sentence_transformers import SentenceTransformer
-from src.__file_paths import TRAIN_FILE_PATH
 from torch import Tensor, stack, argsort
 
 from src.business_logic.utilities.os_utilities import convert_to_device
@@ -17,8 +16,9 @@ class EmdnCodePredictor:
 
     def __init__(
             self,
+            train_emdn_categories: list[str],
+            emdn_nomenclature_path: str,
             pretrained_model: Optional[SentenceTransformer] = None,
-            emdn_nomenclature: Optional[pd.DataFrame] = None,
             emdn_code_to_embedding: Optional[dict[str, Tensor]] = None
     ):
         if self.pretrained_model is None and pretrained_model is None:
@@ -26,45 +26,33 @@ class EmdnCodePredictor:
         if self.pretrained_model is None:
             self.pretrained_model: SentenceTransformer = pretrained_model
 
-        if emdn_nomenclature is not None:
-            self.emdn_nomenclature = emdn_nomenclature
-        else:
-            # Load the EMDN categories which were included in the train dataset
-            _train_emdn_categories = list(
-                set(
-                    pd.read_csv(
-                        TRAIN_FILE_PATH
-                    )['emdn_category']
-                )
-            )
+        # Load the file containing the entire EMDN list of codes
+        _file_df: pd.DataFrame = pd.read_csv(
+            emdn_nomenclature_path,
+            sep=';',
+        )
+        # Keep the columns corresponding to the EMDN category, EMDN code,
+        # and EMDN description
+        _file_df = _file_df.iloc[:, [1, 2, -3]]
+        # Drop any missing value
+        _file_df.dropna(inplace=True)
+        # Clean all the EMDN descriptions by using the clean_text function
+        _file_df.iloc[:, -1] = _file_df.iloc[:, -1].apply(
+            clean_text,
+            perform_classical_cleaning=False
+        )
+        _file_df.columns = ['category', 'code', 'description']
+        self.emdn_nomenclature: pd.DataFrame = _file_df.copy()
+        # Keep only the rows in which the 'category' value is contained in the training list
+        self.emdn_nomenclature = self.emdn_nomenclature[
+            self.emdn_nomenclature['category'].isin(train_emdn_categories)
+        ]
 
-            # Load the file containing the entire EMDN list of codes
-            _file_df: pd.DataFrame = pd.read_csv(
-                SOURCE_DATA_DIRECTORY_PATH + 'EMDN.csv',
-                sep=';',
-            )
-            # Keep the columns corresponding to the EMDN category, EMDN code,
-            # and EMDN description
-            _file_df = _file_df.iloc[:, [1, 2, -3]]
-            # Drop any missing value
-            _file_df.dropna(inplace=True)
-            # Clean all the EMDN descriptions by using the clean_text function
-            _file_df.iloc[:, -1] = _file_df.iloc[:, -1].apply(
-                clean_text,
-                perform_classical_cleaning=False
-            )
-            _file_df.columns = ['category', 'code', 'description']
-            self.emdn_nomenclature: pd.DataFrame = _file_df.copy()
-            # Keep only the rows in which the 'category' value is contained in the training list
-            self.emdn_nomenclature = self.emdn_nomenclature[
-                self.emdn_nomenclature['category'].isin(_train_emdn_categories)
-            ]
-
-            # Sort the EMDN nomenclature by the EMDN code from A to Z
-            self.emdn_nomenclature.sort_values(
-                by='code',
-                inplace=True
-            )
+        # Sort the EMDN nomenclature by the EMDN code from A to Z
+        self.emdn_nomenclature.sort_values(
+            by='code',
+            inplace=True
+        )
 
         if emdn_code_to_embedding is not None:
             self.emdn_code_to_embedding = emdn_code_to_embedding
@@ -97,7 +85,10 @@ class EmdnCodePredictor:
 
         # Embed the given GMDN term name
         gmdn_tensors = self.pretrained_model.encode(
-            [clean_text(_gmdn_term_name, perform_classical_cleaning=False) for _gmdn_term_name in gmdn_term_names],
+            [
+                clean_text(_gmdn_term_name, perform_classical_cleaning=False)
+                for _gmdn_term_name in gmdn_term_names
+            ],
             convert_to_tensor=True,
             device='cuda'
         )
@@ -116,7 +107,7 @@ class EmdnCodePredictor:
         for _row, _gmdn_term_name in zip(similarity_matrix, gmdn_term_names):
             # Keep a dictionary in which the keys are the EMDN categories and the values are the
             # tuples containing the best EMDN code (with the related score)
-            gmdn_emdn_code_scores: dict[str, tuple[str, float]] = {}
+            gmdn_emdn_code_scores: dict[str, list[tuple[str, float]]] = {}
             # Reorder the EMDN codes by the similarity with the GMDN term name
             sorted_indices = argsort(
                 _row,
@@ -138,16 +129,15 @@ class EmdnCodePredictor:
                 else:
                     actual_score = _row[_index].item()
                 if gmdn_emdn_code_scores.keys().__contains__(category):
-                    if actual_score > gmdn_emdn_code_scores[category][1]:
-                        gmdn_emdn_code_scores[category] = (code, actual_score)
+                    # Append the current code and similarity to the list of codes
+                    gmdn_emdn_code_scores[category].append((code, actual_score))
                 else:
-                    gmdn_emdn_code_scores[category] = (code, actual_score)
+                    gmdn_emdn_code_scores[category] = [(code, actual_score)]
 
-            # Extract a list of all the code - score correspondences
-            emdn_code_score_list: list[tuple[str, float]] = [
-                (_tuple[0], _tuple[1])
-                for category, _tuple in gmdn_emdn_code_scores.items()
-            ]
+            # Extract a list of all the code - score correspondences for all the categories
+            emdn_code_score_list: list[tuple[str, float]] = []
+            for category, emdn_code_similarities in gmdn_emdn_code_scores.items():
+                emdn_code_score_list.extend(emdn_code_similarities)
             # Reorder the codes based on their score
             reordered_emdn_codes: list[tuple[str, float]] = sorted(
                 emdn_code_score_list,

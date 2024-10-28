@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from typing import Any, List
 
 import numpy as np
@@ -53,35 +52,11 @@ def _clean_italian_rows_subset(
         # Get the catalogue code of the medical device
         catalogue_code: str = '' if current_row[1] == np.nan else str(current_row[1])
         # Clean the catalogue code
-        catalogue_code = clean_md_catalogue_code(catalogue_code)
-        # If the catalogue code contains a comma, the code must be split
-        # into multiple codes
-        if catalogue_code.__contains__(','):
-            catalogue_codes = []
-            for _code in catalogue_code.split(','):
-                # Replace multiple space characters with a single one
-                _code = re.sub(pattern=" +", string=_code, repl=" ")
-                # Remove any exceeding blank spaces
-                _code = _code.strip()
-                # If the code is made of a single asterisk or is empty
-                if _code == '*' or _code == '':
-                    # Skip the current medical device
-                    continue
-                else:
-                    # Add the code to the list of codes
-                    catalogue_codes.append(_code)
-        else:
-            # Replace multiple space characters with a single one
-            catalogue_code = re.sub(pattern=" +", string=catalogue_code, repl=" ")
-            # Remove any exceeding blank spaces
-            catalogue_code = catalogue_code.strip()
-            # If the code is made of a single asterisk or is empty
-            if catalogue_code == '*' or catalogue_code == '':
-                # Skip the current medical device
-                continue
-            else:
-                # Add the code to the list of codes
-                catalogue_codes = [catalogue_code]
+        catalogue_codes: list[str] = clean_md_catalogue_code(
+            clean_string(catalogue_code)
+        )
+        if len(catalogue_codes) == 0:
+            continue
 
         # Get the name of the company and clean it
         original_company_name = '' if current_row[0] == np.nan else str(current_row[0])

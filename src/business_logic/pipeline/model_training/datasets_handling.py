@@ -3,7 +3,7 @@ from typing import Any
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from src.__constants import RANDOM_SEED_INT
+from src.__constants import RANDOM_SEED_INT, LAST_TEST_EMDN_DF_INDEX, FIRST_TEST_EMDN_DF_INDEX
 from src.__directory_paths import SOURCE_DATA_DIRECTORY_PATH, SQL_CSV_TABLES_DIRECTORY_PATH
 from src.__file_paths import EMDN_GMDN_FDA_CLEANED_FILE_PATH, TEST_FILE_PATH, TRAIN_FILE_PATH
 
@@ -72,6 +72,7 @@ def build_train_test_datasets(
         include_emdn_in_training: bool = False,
         _train_file_path: str = TRAIN_FILE_PATH,
         _test_file_path: str = TEST_FILE_PATH,
+        keep_underrepresented_categories: bool = False
 ) -> None:
     """
     This method creates the train and test files, containing the GMDN Term Name - EMDN code - EMDN category
@@ -88,6 +89,8 @@ def build_train_test_datasets(
     dataset.
     :param _train_file_path: The file path where to store the training dataset.
     :param _test_file_path: The file path where to store the testing dataset.
+    :param keep_underrepresented_categories: A boolean indicating whether to keep the underrepresented categories
+    in the training dataset.
     """
     # Load the exported file of EMDN-GMDN-FDA mappings
     _emdn_gmdn_fda_df_selected = pd.read_csv(
@@ -112,14 +115,15 @@ def build_train_test_datasets(
     )
     # Build a dataset of the EMDN category counts
     emdn_category_counts = gmdn_term_name_category_df['emdn_category'].value_counts()
-    # Find the EMDN categories with a count higher than 200
-    high_count_categories = emdn_category_counts[
-        emdn_category_counts > 200
-        ].index
-    # Keep only the rows for which the EMDN category is in the high count categories
-    gmdn_term_name_category_df = gmdn_term_name_category_df[
-        gmdn_term_name_category_df['emdn_category'].isin(high_count_categories)
-    ]
+    if not keep_underrepresented_categories:
+        # Find the EMDN categories with a count higher than 200
+        high_count_categories = emdn_category_counts[
+            emdn_category_counts > 200
+            ].index
+        # Keep only the rows for which the EMDN category is in the high count categories
+        gmdn_term_name_category_df = gmdn_term_name_category_df[
+            gmdn_term_name_category_df['emdn_category'].isin(high_count_categories)
+        ]
 
     # Build the counts for each EMDN category
     emdn_counts = gmdn_term_name_category_df['emdn_category'].value_counts()
@@ -304,9 +308,8 @@ def load_test_dataset() -> pd.DataFrame:
         gmdn_term_name_emdn_code.items(),
         columns=new_columns
     )
-    first_emdn_index: Any = 1
-    last_emdn_index: Any = 23
-    # Add 22 columns, one for each category of the EMDN nomenclature
+    first_emdn_index: Any = FIRST_TEST_EMDN_DF_INDEX
+    last_emdn_index: Any = LAST_TEST_EMDN_DF_INDEX
     for index in range(first_emdn_index, last_emdn_index):
         emdn_predicted_column = str(index)
         emdn_predicted_prob_column = emdn_predicted_column + '_prob'

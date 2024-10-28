@@ -120,11 +120,11 @@ def _execute_pipeline_phase(
             include_emdn_in_training=False,
             _train_file_path=TRAIN_FILE_PATH,
             _test_file_path=TEST_FILE_PATH,
-            outliers=['W']
+            outliers=['W'],
+            keep_underrepresented_categories=True
         )
         # Train and test the EMDN category predictor
         train_and_test()
-
     else:
         raise Exception("The pipeline phase is not recognized.")
 
@@ -200,7 +200,7 @@ def execute_pipeline(
             'countries': [
                 CountryName.USA,
                 CountryName.ITALY,
-            ]
+        ]
         },
         PipelinePhase.START_MAPPING_SCRAPING: None,
         PipelinePhase.TRAIN_MODEL: None,
@@ -213,7 +213,6 @@ def execute_pipeline(
             export_tables(
                 database_information=database_information
             )
-
         if arguments is not None and type(arguments) is dict:
             _run_and_profile_phase(
                 **arguments,

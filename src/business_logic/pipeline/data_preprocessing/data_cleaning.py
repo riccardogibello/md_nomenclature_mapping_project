@@ -7,55 +7,94 @@ from typing import Optional
 def clean_md_catalogue_code(
         medical_device_code: str,
         is_italian_code: bool = True,
-) -> str:
+) -> list[str]:
     """
     This method standardizes both American and Italian catalogue codes of medical devices.
 
     :param is_italian_code: Indicates whether to apply some cleaning rules specific to the Italian codes.
     :param medical_device_code: The code to be standardized.
 
-    :return: The standardized code.
+    :return: A list containing all the codes extracted from the given medical device code.
     """
-    # clean the string in case of None or other malformed types
-    medical_device_code = clean_string(medical_device_code)
+    # If the symbol contains an & symbol, return an empty string
+    if medical_device_code.__contains__('&'):
+        return []
+    else:
+        # Use the following symbols as separators: ' - ', ';'
+        # Don't use these:
+        #   '-' (there are cases in which the catalogue code contains a hyphen, e.g. 123-456)
+        #   '/' (there are cases in which the catalogue code contains a slash, e.g. 123/456)
+        medical_device_code = re.sub(
+            pattern=r" - |;",
+            string=medical_device_code,
+            repl=','
+        )
+        # If the code is italian
+        if is_italian_code:
+            patterns = [
+                r"[" + string.punctuation + " ]*DA[ ]",
+                r"[" + string.punctuation + " ]*DAL[ ]",
+                r"[" + string.punctuation + " ]+A[ ]",
+                r"[" + string.punctuation + " ]+AL[ ]",
+            ]
+            for pattern in patterns:
+                medical_device_code = re.sub(
+                    pattern=pattern,
+                    string=medical_device_code,
+                    repl=','
+                )
+        # If the code contains a comma
+        if medical_device_code.__contains__(','):
+            # Split the code into multiple codes using the comma as a separator and perform the cleaning
+            # on each of them
+            codes = medical_device_code.split(',')
+            cleaned_codes = []
+            for code in codes:
+                cleaned_code = clean_md_catalogue_code(code, is_italian_code)
+                if len(cleaned_code) > 0:
+                    cleaned_codes.extend(cleaned_code)
+            return cleaned_codes
+        else:
+            # Remove:
+            patterns = [
+                # Any character between () and []
+                r"\[.*?\]|\(.*?\)",
+                # Any unpaired round or square bracket,
+                # any escape character,
+                # any " and ' symbol,
+                # any # symbol
+                # any . symbol
+                # any - symbol
+                # any of "–=°Ⅱ@_™" symbols
+                r"[\(\)\[\]\\]|['\"#.]|[\–\=°Ⅱ@_™]",
+            ]
+            for pattern in patterns:
+                medical_device_code = re.sub(
+                    pattern=pattern,
+                    string=medical_device_code,
+                    repl=''
+                )
 
-    # remove DA(L) - A(L) pattern
-    medical_device_code = re.sub(pattern=r"[" + string.punctuation + " ]*DA[ ]", string=medical_device_code, repl=',')
-    medical_device_code = re.sub(pattern=r"[" + string.punctuation + " ]*DAL[ ]", string=medical_device_code, repl=',')
-    medical_device_code = re.sub(pattern=r"[" + string.punctuation + " ]+A[ ]", string=medical_device_code, repl=',')
-    medical_device_code = re.sub(pattern=r"[" + string.punctuation + " ]+AL[ ]", string=medical_device_code, repl=',')
+            # Replace every X (or x) holder (even repeated) with a single asterisk character
+            patterns = [
+                r"[X]+",
+                r"[*]+"
+            ]
+            for pattern in patterns:
+                medical_device_code = re.sub(
+                    pattern=pattern,
+                    string=medical_device_code,
+                    repl='*'
+                )
 
-    # replace the '-', '/' and ';' separators with a comma
-    medical_device_code = medical_device_code.replace(' - ', ',')
-    medical_device_code = medical_device_code.replace('/', ',')
-    medical_device_code = medical_device_code.replace(';', ',')
-
-    # remove every blank space from the src
-    medical_device_code = re.sub(pattern=r"[ ]+", string=medical_device_code, repl='')
-
-    # transform the src in capital letters
-    medical_device_code = medical_device_code.upper()
-
-    if is_italian_code:
-        # replace every X (or x) holder (even repeated) in the src with a single asterisk character
-        medical_device_code = re.sub(pattern=r"[X]+", string=medical_device_code, repl='*')
-
-        # replace possible subsequent asterisk characters with a single one
-        medical_device_code = re.sub(pattern=r"[*]+", string=medical_device_code, repl='*')
-
-    # remove any character between () and []
-    medical_device_code = re.sub(pattern=r"[(].*[)]", string=medical_device_code, repl='')
-    medical_device_code = re.sub(pattern=r"[\[].*[\]]", string=medical_device_code, repl='')
-
-    # remove any parenthesis left in the src
-    medical_device_code = medical_device_code.replace('(', '')
-    medical_device_code = medical_device_code.replace(')', '')
-    medical_device_code = medical_device_code.replace('[', '')
-    medical_device_code = medical_device_code.replace(']', '')
-    # Remove any escape character
-    medical_device_code = medical_device_code.replace('\\', '')
-
-    return clean_extra_blank_spaces(medical_device_code)
+            returned_code = clean_extra_blank_spaces(medical_device_code)
+            # Get all the unique characters in the code
+            unique_characters = set(returned_code)
+            # If the unique characters are blank spaces, commas, asterisks and/or -
+            if unique_characters.issubset({' ', ',', '*', '-'}):
+                return []
+            else:
+                return [returned_code]
 
 
 def clean_company_name(
@@ -135,7 +174,14 @@ def clean_string(
         if type(string_to_be_cleaned) is int:
             string_to_be_cleaned = str(string_to_be_cleaned)
 
-        return string_to_be_cleaned.encode(encoding, errors='ignore').decode(encoding)
+        string_to_be_cleaned = string_to_be_cleaned.encode(
+            encoding,
+            errors='ignore'
+        ).decode(encoding)
+
+        string_to_be_cleaned = string_to_be_cleaned.upper()
+
+        return string_to_be_cleaned
 
 
 def clean_extra_blank_spaces(

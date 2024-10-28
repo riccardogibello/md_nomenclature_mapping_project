@@ -166,7 +166,7 @@ def _parse_american_xml_file(
                         # Set the original medical catalogue code value
                         original_medical_catalogue_code: str = _safe_text_access(element)
                         # Clean the medical catalogue code
-                        md_catalogue_code = clean_md_catalogue_code(
+                        md_cat_code_list: list[str] = clean_md_catalogue_code(
                             clean_string(original_medical_catalogue_code),
                             is_italian_code=False,
                         )
@@ -226,37 +226,38 @@ def _parse_american_xml_file(
 
                         # If either original values of the company name, the medical device name or the catalogue code
                         # are missing, skip the row
-                        if original_company_name == '' or original_device_name == '' or md_catalogue_code == '':
+                        if original_company_name == '' or original_device_name == '' or len(md_cat_code_list) == 0:
                             continue
                         else:
-                            vales = [
-                                original_company_name,
-                                original_device_name,
-                                md_catalogue_code,
-                            ]
-                            if None in vales or '' in vales:
-                                raise Exception(f"Missing values: {vales}")
-
-                            american_dataframe_rows.append(
-                                (
+                            for md_cat_code in md_cat_code_list:
+                                values = [
                                     original_company_name,
-                                    company_name,
-                                    None,
-                                    usa_identifier,
-                                    None,
                                     original_device_name,
-                                    medical_device_name,
-                                    None,
-                                    md_catalogue_code,
-                                    'MD',
-                                    None,
-                                    fda_product_code,
-                                    None,
-                                    None,
-                                    gmdn_term,
-                                    gmdn_definition,
+                                    md_cat_code,
+                                ]
+                                if None in values or '' in values:
+                                    raise Exception(f"Missing values: {values}")
+
+                                american_dataframe_rows.append(
+                                    (
+                                        original_company_name,
+                                        company_name,
+                                        None,
+                                        usa_identifier,
+                                        None,
+                                        original_device_name,
+                                        medical_device_name,
+                                        None,
+                                        md_cat_code,
+                                        'MD',
+                                        None,
+                                        fda_product_code,
+                                        None,
+                                        None,
+                                        gmdn_term,
+                                        gmdn_definition,
+                                    )
                                 )
-                            )
 
                     # Delete the file from which the data have been extracted
                     os.remove(xml_file_path)
